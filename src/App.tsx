@@ -1,12 +1,18 @@
 import { useMemo, useState, useEffect } from 'react'
 // @ts-ignore plain JS module
 import { NAKSHATRAS, LORDS, spans, tara, TARAS } from '@/lib/astro.js'
+// @ts-ignore plain JS module
+import { positions, sunTimes, rahuKaal } from '@/lib/planets.js'
 
 const TZ = 'Australia/Sydney'
+const STORE_KEY = 'nakshatra-tara.birth'
 
 type Span = { idx: number; name: string; lord: string; start: number; end: number }
+type Pos = {
+  key: string; name: string; retro: boolean; lon: number; sign: number; signName: string
+  inSign: number; nak: number; nakName: string; pada: number
+}
 
-// Sydney wall-clock midnight -> UTC ms (handles AEST/AEDT)
 function sydneyMidnight(y: number, m: number, d: number): number {
   const fmt = new Intl.DateTimeFormat('en-US', {
     timeZone: TZ, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit',
@@ -34,7 +40,10 @@ const fmtTime = (ms: number) =>
   new Intl.DateTimeFormat('en-AU', {
     timeZone: TZ, weekday: 'short', day: 'numeric', month: 'short', year: 'numeric',
     hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
-  }).format(new Date(ms))
+  }).format(new Date(ms + 30000))
+
+const fmtClock = (ms: number) =>
+  new Intl.DateTimeFormat('en-AU', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(ms + 30000))
 
 const tzLabel = (ms: number) =>
   new Intl.DateTimeFormat('en-AU', { timeZone: TZ, timeZoneName: 'short' })
@@ -42,8 +51,12 @@ const tzLabel = (ms: number) =>
 
 function shiftDate(iso: string, days: number): string {
   const [y, m, d] = iso.split('-').map(Number)
-  const t = new Date(Date.UTC(y, m - 1, d + days))
-  return t.toISOString().slice(0, 10)
+  return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10)
+}
+
+const dms = (x: number) => {
+  const d = Math.floor(x), mf = (x - d) * 60, m = Math.floor(mf), s = Math.floor((mf - m) * 60)
+  return `${d}° ${String(m).padStart(2, '0')}' ${String(s).padStart(2, '0')}"`
 }
 
 const natureStyle: Record<string, string> = {
@@ -53,122 +66,262 @@ const natureStyle: Record<string, string> = {
   'Most adverse': 'bg-rose-100 text-rose-900 border-rose-400',
 }
 
+function loadBirth(): number {
+  try {
+    const v = Number(localStorage.getItem(STORE_KEY))
+    if (Number.isInteger(v) && v >= 0 && v < 27 && localStorage.getItem(STORE_KEY) !== null) return v
+  } catch { /* storage unavailable */ }
+  return 24 // Purva Bhadrapada
+}
+
 export default function App() {
-  const [date, setDate] = useState(todaySydney())
-  const [birth, setBirth] = useState(24) // Purva Bhadrapada
+  const [tab, setTab] = useState<'day' | 'planets'>('day')
   const [now, setNow] = useState(Date.now())
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 60000)
     return () => clearInterval(id)
   }, [])
 
-  const year = Number(date.slice(0, 4))
-  const valid = /^\d{4}-\d{2}-\d{2}$/.test(date) && year >= 1900 && year <= 2100
-
-  const rows: Span[] = useMemo(() => {
-    if (!valid) return []
-    const [y, m, d] = date.split('-').map(Number)
-    const from = sydneyMidnight(y, m, d)
-    const [y2, m2, d2] = shiftDate(date, 1).split('-').map(Number)
-    const to = sydneyMidnight(y2, m2, d2)
-    return spans(from, to)
-  }, [date, valid])
-
   return (
     <div className="min-h-screen bg-stone-100 text-stone-900">
       <div className="max-w-3xl px-5 py-8 md:px-10">
         <h1 className="font-serif text-3xl tracking-tight">Nakshatra and Tara</h1>
-        <p className="mt-1 text-sm text-stone-600">
-          Moon Nakshatra for a day in Sydney time, with the Tara counted from your birth Nakshatra.
-        </p>
-
-        <div className="mt-6 grid gap-4 border-l-4 border-stone-800 bg-white p-5 sm:grid-cols-2">
-          <label className="block text-sm">
-            <span className="font-medium">Date (Sydney)</span>
-            <div className="mt-1 flex gap-1">
-              <button className="border border-stone-300 px-2 hover:bg-stone-100" onClick={() => setDate(shiftDate(date, -1))} aria-label="Previous day">‹</button>
-              <input
-                type="date" min="1900-01-01" max="2100-12-31" value={date}
-                onChange={(e) => setDate(e.target.value)}
-                className="w-full border border-stone-300 px-2 py-1.5 font-mono"
-              />
-              <button className="border border-stone-300 px-2 hover:bg-stone-100" onClick={() => setDate(shiftDate(date, 1))} aria-label="Next day">›</button>
-            </div>
-            <button className="mt-1 text-xs text-stone-600 underline" onClick={() => setDate(todaySydney())}>Today</button>
-          </label>
-          <label className="block text-sm">
-            <span className="font-medium">Birth Nakshatra</span>
-            <select
-              value={birth} onChange={(e) => setBirth(Number(e.target.value))}
-              className="mt-1 w-full border border-stone-300 bg-white px-2 py-1.5"
-            >
-              {NAKSHATRAS.map((n: string, i: number) => (
-                <option key={n} value={i}>{i + 1}. {n} ({LORDS[i % 9]})</option>
-              ))}
-            </select>
-          </label>
-        </div>
-
-        {!valid && (
-          <p className="mt-6 text-rose-700">Enter a date between 1900 and 2100.</p>
-        )}
-
-        <div className="mt-6 space-y-3">
-          {rows.map((r) => {
-            const t = tara(birth, r.idx)
-            const live = now >= r.start && now < r.end
-            return (
-              <div key={r.start} className={`border bg-white p-4 ${live ? 'border-stone-900 ring-1 ring-stone-900' : 'border-stone-300'}`}>
-                <div className="flex flex-wrap items-baseline justify-between gap-2">
-                  <div>
-                    <span className="font-serif text-xl">{r.name}</span>
-                    <span className="ml-2 text-sm text-stone-500">#{r.idx + 1}, lord {r.lord}</span>
-                    {live && <span className="ml-2 bg-stone-900 px-1.5 py-0.5 text-xs text-white">NOW</span>}
-                  </div>
-                  <span className={`border px-2 py-0.5 text-sm font-medium ${natureStyle[t.nature]}`}>
-                    {t.name} Tara · {t.nature}
-                  </span>
-                </div>
-                <dl className="mt-3 grid grid-cols-[4rem_1fr] gap-y-1 text-sm">
-                  <dt className="text-stone-500">Starts</dt>
-                  <dd className="font-mono">{fmtTime(r.start)} {tzLabel(r.start)}</dd>
-                  <dt className="text-stone-500">Ends</dt>
-                  <dd className="font-mono">{fmtTime(r.end)} {tzLabel(r.end)}</dd>
-                  <dt className="text-stone-500">Tara</dt>
-                  <dd>Count {t.count} from {NAKSHATRAS[birth]}. {t.meaning}.</dd>
-                </dl>
-              </div>
-            )
-          })}
-        </div>
-
-        <details className="mt-8 text-sm text-stone-600">
-          <summary className="cursor-pointer font-medium text-stone-800">Tara key</summary>
-          <table className="mt-2 w-full border-collapse bg-white text-left">
-            <thead><tr className="border-b border-stone-300"><th className="p-2">Count</th><th className="p-2">Tara</th><th className="p-2">Nature</th></tr></thead>
-            <tbody>
-              {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((c) => {
-                const x = TARAS[c % 9]
-                return (
-                  <tr key={c} className="border-b border-stone-200">
-                    <td className="p-2 font-mono">{c}, {c + 9}, {c + 18}</td>
-                    <td className="p-2">{x.name}</td>
-                    <td className="p-2">{x.nature}</td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </details>
-
-        <p className="mt-6 text-xs leading-relaxed text-stone-500">
-          Method: sidereal Moon with Lahiri ayanamsa, computed in the page from the Meeus lunar series.
-          Checked against Swiss Ephemeris (within 10 arcseconds, about 20 seconds of time, 1900 to 2100) and
-          against all 362 Nakshatra changes in the Astroved 2026 calendar (all within 1 minute).
-          Works for dates from 1900 to 2100. Sydney daylight saving is applied automatically.
-          Tara results are traditional tendencies, not predictions.
+        <p className="mt-1 text-sm text-stone-600">Sydney time. Sidereal zodiac, Lahiri ayanamsa.</p>
+        <nav className="mt-5 flex border-b border-stone-300 text-sm">
+          {([['day', 'Day: Nakshatra, Tara, Rahu Kaal'], ['planets', 'Planets now']] as const).map(([k, label]) => (
+            <button
+              key={k} onClick={() => setTab(k)}
+              className={`-mb-px border-b-2 px-3 py-2 ${tab === k ? 'border-stone-900 font-medium' : 'border-transparent text-stone-500'}`}
+            >{label}</button>
+          ))}
+        </nav>
+        {tab === 'day' ? <DayView now={now} /> : <PlanetsView now={now} />}
+        <p className="mt-8 text-xs leading-relaxed text-stone-500">
+          Calculated on your device. Moon Nakshatra checked against all 362 changes in the Astroved 2026 calendar
+          (within 1 minute). Planets, Ascendant and Rahu (true node) checked against Swiss Ephemeris from 1950 to 2100:
+          typical error under 10 arcseconds, worst case about 1 arcminute. Sunrise, sunset and Rahu Kaal match Drik
+          Panchang for Sydney. Location: Sydney, 33°52′S 151°12′E. Tara and Rahu Kaal are traditional guides, not predictions.
         </p>
       </div>
     </div>
+  )
+}
+
+function DayView({ now }: { now: number }) {
+  const [date, setDate] = useState(todaySydney())
+  const [birth, setBirthState] = useState<number>(loadBirth)
+  const setBirth = (v: number) => {
+    setBirthState(v)
+    try { localStorage.setItem(STORE_KEY, String(v)) } catch { /* storage unavailable */ }
+  }
+
+  const year = Number(date.slice(0, 4))
+  const valid = /^\d{4}-\d{2}-\d{2}$/.test(date) && year >= 1900 && year <= 2100
+
+  const day = useMemo(() => {
+    if (!valid) return null
+    const [y, m, d] = date.split('-').map(Number)
+    const from = sydneyMidnight(y, m, d)
+    const [y2, m2, d2] = shiftDate(date, 1).split('-').map(Number)
+    const to = sydneyMidnight(y2, m2, d2)
+    const sun = sunTimes(from)
+    const weekday = new Date(Date.UTC(y, m - 1, d)).getUTCDay()
+    const rk = sun.rise && sun.set ? rahuKaal(sun.rise, sun.set, weekday) : null
+    return { rows: spans(from, to) as Span[], sun, rk }
+  }, [date, valid])
+
+  return (
+    <>
+      <div className="mt-6 grid gap-4 border-l-4 border-stone-800 bg-white p-5 sm:grid-cols-2">
+        <label className="block text-sm">
+          <span className="font-medium">Date (Sydney)</span>
+          <div className="mt-1 flex gap-1">
+            <button className="border border-stone-300 px-2 hover:bg-stone-100" onClick={() => setDate(shiftDate(date, -1))} aria-label="Previous day">‹</button>
+            <input
+              type="date" min="1900-01-01" max="2100-12-31" value={date}
+              onChange={(e) => setDate(e.target.value)}
+              className="w-full border border-stone-300 px-2 py-1.5 font-mono"
+            />
+            <button className="border border-stone-300 px-2 hover:bg-stone-100" onClick={() => setDate(shiftDate(date, 1))} aria-label="Next day">›</button>
+          </div>
+          <button className="mt-1 text-xs text-stone-600 underline" onClick={() => setDate(todaySydney())}>Today</button>
+        </label>
+        <label className="block text-sm">
+          <span className="font-medium">Birth Nakshatra</span>
+          <select
+            value={birth} onChange={(e) => setBirth(Number(e.target.value))}
+            className="mt-1 w-full border border-stone-300 bg-white px-2 py-1.5"
+          >
+            {NAKSHATRAS.map((n: string, i: number) => (
+              <option key={n} value={i}>{i + 1}. {n} ({LORDS[i % 9]})</option>
+            ))}
+          </select>
+          <span className="mt-1 block text-xs text-stone-500">Remembered on this phone.</span>
+        </label>
+      </div>
+
+      {!valid && <p className="mt-6 text-rose-700">Enter a date between 1900 and 2100.</p>}
+
+      {day && (
+        <div className="mt-6 border border-stone-300 bg-white p-4 text-sm">
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <span className="font-serif text-lg">Rahu Kaal</span>
+            {day.rk && now >= day.rk.start && now < day.rk.end && (
+              <span className="bg-stone-900 px-1.5 py-0.5 text-xs text-white">NOW</span>
+            )}
+          </div>
+          {day.rk ? (
+            <dl className="mt-2 grid grid-cols-[5.5rem_1fr] gap-y-1">
+              <dt className="text-stone-500">Rahu Kaal</dt>
+              <dd className="font-mono font-medium">{fmtClock(day.rk.start)} to {fmtClock(day.rk.end)} {tzLabel(day.rk.start)}</dd>
+              <dt className="text-stone-500">Sunrise</dt>
+              <dd className="font-mono">{fmtClock(day.sun.rise!)}</dd>
+              <dt className="text-stone-500">Sunset</dt>
+              <dd className="font-mono">{fmtClock(day.sun.set!)}</dd>
+            </dl>
+          ) : <p className="mt-2 text-stone-500">Sunrise or sunset not found for this date.</p>}
+          <p className="mt-2 text-xs text-stone-500">
+            One eighth of sunrise to sunset, segment set by weekday. Traditionally avoided for starting new work.
+          </p>
+        </div>
+      )}
+
+      <div className="mt-4 space-y-3">
+        {day?.rows.map((r) => {
+          const t = tara(birth, r.idx)
+          const live = now >= r.start && now < r.end
+          return (
+            <div key={r.start} className={`border bg-white p-4 ${live ? 'border-stone-900 ring-1 ring-stone-900' : 'border-stone-300'}`}>
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <div>
+                  <span className="font-serif text-xl">{r.name}</span>
+                  <span className="ml-2 text-sm text-stone-500">#{r.idx + 1}, lord {r.lord}</span>
+                  {live && <span className="ml-2 bg-stone-900 px-1.5 py-0.5 text-xs text-white">NOW</span>}
+                </div>
+                <span className={`border px-2 py-0.5 text-sm font-medium ${natureStyle[t.nature]}`}>
+                  {t.name} Tara · {t.nature}
+                </span>
+              </div>
+              <dl className="mt-3 grid grid-cols-[4rem_1fr] gap-y-1 text-sm">
+                <dt className="text-stone-500">Starts</dt>
+                <dd className="font-mono">{fmtTime(r.start)} {tzLabel(r.start)}</dd>
+                <dt className="text-stone-500">Ends</dt>
+                <dd className="font-mono">{fmtTime(r.end)} {tzLabel(r.end)}</dd>
+                <dt className="text-stone-500">Tara</dt>
+                <dd>Count {t.count} from {NAKSHATRAS[birth]}. {t.meaning}.</dd>
+              </dl>
+            </div>
+          )
+        })}
+      </div>
+
+      <details className="mt-8 text-sm text-stone-600">
+        <summary className="cursor-pointer font-medium text-stone-800">Tara key</summary>
+        <table className="mt-2 w-full border-collapse bg-white text-left">
+          <thead><tr className="border-b border-stone-300"><th className="p-2">Count</th><th className="p-2">Tara</th><th className="p-2">Nature</th></tr></thead>
+          <tbody>
+            {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((c) => {
+              const x = TARAS[c % 9]
+              return (
+                <tr key={c} className="border-b border-stone-200">
+                  <td className="p-2 font-mono">{c}, {c + 9}, {c + 18}</td>
+                  <td className="p-2">{x.name}</td>
+                  <td className="p-2">{x.nature}</td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </details>
+    </>
+  )
+}
+
+const ABBR: Record<string, string> = {
+  Asc: 'Asc', Sun: 'Su', Moon: 'Mo', Mars: 'Ma', Mercury: 'Me', Jupiter: 'Ju', Venus: 'Ve',
+  Saturn: 'Sa', Rahu: 'Ra', Ketu: 'Ke', Uranus: 'Ur', Neptune: 'Ne', Pluto: 'Pl',
+}
+
+function PlanetsView({ now }: { now: number }) {
+  const [t, setT] = useState(now)
+  useEffect(() => setT(now), [now])
+  const rows: Pos[] = useMemo(() => positions(t), [t])
+
+  return (
+    <>
+      <div className="mt-6 flex flex-wrap items-baseline justify-between gap-2 text-sm">
+        <span>Positions for <span className="font-mono">{fmtTime(t)} {tzLabel(t)}</span></span>
+        <button className="border border-stone-300 bg-white px-2 py-1 hover:bg-stone-50" onClick={() => setT(Date.now())}>Refresh</button>
+      </div>
+      <div className="mt-3 overflow-x-auto border border-stone-300 bg-white">
+        <table className="w-full border-collapse text-left text-sm">
+          <thead>
+            <tr className="border-b border-stone-300 bg-stone-50">
+              <th className="p-2">Planet</th>
+              <th className="hidden p-2 sm:table-cell">Longitude</th>
+              <th className="p-2">Rashi</th>
+              <th className="p-2">Nakshatra</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.key} className="border-b border-stone-200">
+                <td className="p-2 font-medium">{r.name}{r.retro && r.key !== 'Rahu' && r.key !== 'Ketu' ? ' (R)' : ''}</td>
+                <td className="hidden p-2 font-mono sm:table-cell">{dms(r.lon)}</td>
+                <td className="p-2"><span className="font-mono">{dms(r.inSign)}</span> {r.signName}</td>
+                <td className="p-2">{r.nakName} {r.pada}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="mt-2 text-xs text-stone-500">
+        Rahu and Ketu use the true node and always move backward. (R) marks a retrograde planet. Nakshatra shown with pada (1 to 4).
+      </p>
+      <h2 className="mt-6 font-serif text-xl">Lagna chart (North Indian, whole sign)</h2>
+      <NorthChart rows={rows} />
+    </>
+  )
+}
+
+// House centres and sign-number spots, on a 400 x 400 square
+const HOUSE_POS: [number, number][] = [
+  [200, 105], [100, 42], [42, 100], [105, 200], [42, 300], [100, 358],
+  [200, 295], [300, 358], [358, 300], [295, 200], [358, 100], [300, 42],
+]
+const SIGN_POS: [number, number][] = [
+  [200, 182], [100, 88], [88, 104], [182, 204], [88, 300], [100, 316],
+  [200, 226], [300, 316], [312, 300], [218, 204], [312, 104], [300, 88],
+]
+
+function NorthChart({ rows }: { rows: Pos[] }) {
+  const lagna = rows[0].sign
+  const byHouse: string[][] = Array.from({ length: 12 }, () => [])
+  for (const r of rows.slice(1)) {
+    const h = (r.sign - lagna + 12) % 12
+    byHouse[h].push(`${ABBR[r.key]} ${Math.floor(r.inSign)}°${r.retro && r.key !== 'Rahu' && r.key !== 'Ketu' ? 'R' : ''}`)
+  }
+  byHouse[0].unshift(`Asc ${Math.floor(rows[0].inSign)}°`)
+  return (
+    <svg viewBox="-4 -4 408 408" className="mt-3 w-full max-w-md bg-white" role="img" aria-label="North Indian Lagna chart">
+      <g fill="none" stroke="#57534e" strokeWidth="1.5">
+        <rect x="0" y="0" width="400" height="400" />
+        <line x1="0" y1="0" x2="400" y2="400" />
+        <line x1="400" y1="0" x2="0" y2="400" />
+        <polygon points="200,0 400,200 200,400 0,200" />
+      </g>
+      {SIGN_POS.map(([x, y], h) => (
+        <text key={`s${h}`} x={x} y={y} textAnchor="middle" fontSize="13" fill="#a8a29e">{((lagna + h) % 12) + 1}</text>
+      ))}
+      {HOUSE_POS.map(([x, y], h) => {
+        const items = byHouse[h]
+        const lh = 14
+        const top = y - ((items.length - 1) * lh) / 2
+        return items.map((txt, i) => (
+          <text key={`p${h}-${i}`} x={x} y={top + i * lh + 4} textAnchor="middle" fontSize="12"
+            fill={txt.startsWith('Asc') ? '#1c1917' : '#b45309'} fontWeight={txt.startsWith('Asc') ? 600 : 400}>{txt}</text>
+        ))
+      })}
+    </svg>
   )
 }
